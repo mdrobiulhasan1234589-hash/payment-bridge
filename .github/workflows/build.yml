@@ -19,23 +19,18 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Gradle Wrapper
+      - name: Download Gradle 8.7
         run: |
-          mkdir -p gradle/wrapper
-          wget -q https://raw.githubusercontent.com/gradle/gradle/v8.7.0/gradle/wrapper/gradle-wrapper.jar -O gradle/wrapper/gradle-wrapper.jar || true
-          chmod +x gradlew
+          cd $HOME
+          wget -q https://services.gradle.org/distributions/gradle-8.7-bin.zip
+          unzip -q gradle-8.7-bin.zip
+          echo "$HOME/gradle-8.7/bin" >> $GITHUB_PATH
 
-      - name: Download gradle-wrapper.jar if missing
-        run: |
-          if [ ! -s gradle/wrapper/gradle-wrapper.jar ]; then
-            wget -q https://github.com/gradle/gradle/raw/v8.7.0/gradle/wrapper/gradle-wrapper.jar -O gradle/wrapper/gradle-wrapper.jar
-          fi
-          ls -la gradle/wrapper/
-          file gradle/wrapper/gradle-wrapper.jar
+      - name: Verify Gradle
+        run: gradle --version
 
       - name: Build Debug APK
-        run: |
-          ./gradlew assembleDebug --stacktrace --no-daemon
+        run: gradle assembleDebug --stacktrace --no-daemon
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
