@@ -10,40 +10,27 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
-/**
- * ApiClient — Sends parsed payment data to Supabase Edge Function.
- *
- * Sends HTTPS POST to the backend URL configured in Prefs.
- * Uses x-bridge-secret header for authentication.
- */
 object ApiClient {
-
-    private const val TAG = "PaymentBridge"
 
     private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
 
+    // Fast client — shorter timeouts for quicker response
     private val httpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
-            .connectTimeout(15, TimeUnit.SECONDS)
-            .writeTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(15, TimeUnit.SECONDS)
+            .connectTimeout(8, TimeUnit.SECONDS)
+            .writeTimeout(8, TimeUnit.SECONDS)
+            .readTimeout(8, TimeUnit.SECONDS)
+            .callTimeout(12, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
             .build()
     }
 
-    /**
-     * Result of a send attempt.
-     */
     data class Result(
         val success: Boolean,
         val status: String,
         val message: String
     )
 
-    /**
-     * Send a payment to the backend.
-     * This runs on a background thread — safe to call from anywhere.
-     */
     suspend fun sendPayment(
         context: Context,
         payment: PaymentParser.PaymentData
@@ -54,22 +41,21 @@ object ApiClient {
 
         if (backendUrl.isBlank()) {
             return@withContext Result(
-                success = false,
-                status = "MISSING_URL",
-                message = "Backend URL not configured in Settings"
+                false,
+                "MISSING_URL",
+                "Backend URL not configured"
             )
         }
 
         if (bridgeSecret.isBlank()) {
             return@withContext Result(
-                success = false,
-                status = "MISSING_SECRET",
-                message = "Bridge Secret not configured in Settings"
+                false,
+                "MISSING_SECRET",
+                "Bridge Secret not configured"
             )
         }
 
         try {
-            // Build JSON body
             val json = JSONObject().apply {
                 put("sender_phone", payment.senderPhone)
                 put("amount", payment.amount)
@@ -97,13 +83,12 @@ object ApiClient {
                         "HTTP ${response.code} — ${responseBody.take(200)}"
                     )
                     return@withContext Result(
-                        success = false,
-                        status = "HTTP_${response.code}",
-                        message = "Server returned ${response.code}"
+                        false,
+                        "HTTP_${response.code}",
+                        "Server returned ${response.code}"
                     )
                 }
 
-                // Parse server response
                 try {
                     val jsonResp = JSONObject(responseBody)
                     val ok = jsonResp.optBoolean("ok", false)
@@ -111,32 +96,28 @@ object ApiClient {
                     val message = jsonResp.optString("message", "")
 
                     return@withContext Result(
-                        success = ok,
-                        status = status,
-                        message = message.ifBlank { "Server responded: $status" }
+                        ok,
+                        status,
+                        message.ifBlank { "Server responded: $status" }
                     )
                 } catch (_: Exception) {
                     return@withContext Result(
-                        success = true,
-                        status = "OK",
-                        message = "Sent (response not JSON)"
+                        true,
+                        "OK",
+                        "Sent (response not JSON)"
                     )
                 }
             }
         } catch (e: Exception) {
             LogManager.add(context, "ERROR", "Network error: ${e.message}")
             return@withContext Result(
-                success = false,
-                status = "NETWORK_ERROR",
-                message = e.message ?: "Network error"
+                false,
+                "NETWORK_ERROR",
+                e.message ?: "Network error"
             )
         }
     }
 
-    /**
-     * Test connection — sends a harmless ping-style request.
-     * Returns true if backend responds (even with UNAUTHORIZED).
-     */
     suspend fun testConnection(context: Context): Result = withContext(Dispatchers.IO) {
         val backendUrl = Prefs.getBackendUrl(context)
         val bridgeSecret = Prefs.getBridgeSecret(context)
@@ -149,8 +130,6 @@ object ApiClient {
         }
 
         try {
-            // Send a harmless invalid request — server will return INVALID_INPUT,
-            // which confirms connection + auth are working.
             val json = JSONObject().apply {
                 put("sender_phone", "")
                 put("amount", 0)
