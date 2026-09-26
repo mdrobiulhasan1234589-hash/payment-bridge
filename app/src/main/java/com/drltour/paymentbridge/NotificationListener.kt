@@ -8,13 +8,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
-/**
- * NotificationListener — Receives payment notifications from:
- *   - bKash / Nagad / Rocket apps
- *   - SMS apps (Messages) — because bKash SMS also contains TrxID
- *
- * The PaymentParser automatically filters out unrelated SMS/promotions.
- */
 class NotificationListener : NotificationListenerService() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -23,14 +16,47 @@ class NotificationListener : NotificationListenerService() {
     private val TRX_MEMORY_WINDOW_MS = 10 * 60 * 1000L
     private val MAX_RECENT = 100
 
+    override fun onListenerConnected() {
+        super.onListenerConnected()
+        try {
+            LogManager.add(applicationContext, "INFO", "🔌 NotificationListener CONNECTED")
+        } catch (_: Exception) { }
+    }
+
+    override fun onListenerDisconnected() {
+        super.onListenerDisconnected()
+        try {
+            LogManager.add(applicationContext, "INFO", "🔌 NotificationListener DISCONNECTED")
+        } catch (_: Exception) { }
+    }
+
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         try {
+            // 🔍 DEBUG LOG 1: Every notification
+            LogManager.add(
+                applicationContext,
+                "DEBUG",
+                "📩 Notification from: ${sbn?.packageName ?: "null"}"
+            )
+
             if (sbn == null) return
 
             val packageName = sbn.packageName ?: return
-            if (!isPaymentSourcePackage(packageName)) return
 
-            if (!Prefs.isMonitoringEnabled(applicationContext)) return
+            // 🔍 DEBUG LOG 2: Package filter check
+            val isPaymentSource = isPaymentSourcePackage(packageName)
+            LogManager.add(
+                applicationContext,
+                "DEBUG",
+                "🔎 Package match: $packageName = $isPaymentSource"
+            )
+
+            if (!isPaymentSource) return
+
+            if (!Prefs.isMonitoringEnabled(applicationContext)) {
+                LogManager.add(applicationContext, "DEBUG", "⚠️ Monitoring disabled")
+                return
+            }
 
             val extras = sbn.notification?.extras ?: return
 
@@ -45,11 +71,28 @@ class NotificationListener : NotificationListenerService() {
                 .joinToString(" ")
                 .ifBlank { text }
 
+            // 🔍 DEBUG LOG 3: Notification content
+            LogManager.add(
+                applicationContext,
+                "DEBUG",
+                "📝 Title: $title | Text: ${combinedText.take(80)}"
+            )
+
             if (combinedText.isBlank() && title.isBlank()) return
 
-            // Parser handles provider detection (bKash/Nagad/Rocket)
-            // If it's not a payment message, it returns null and we ignore it.
-            val payment = PaymentParser.parse(title, combinedText) ?: return
+            val payment = PaymentParser.parse(title, combinedText)
+
+            // 🔍 DEBUG LOG 4: Parse result
+            if (payment == null) {
+                LogManager.add(applicationContext, "DEBUG", "❌ Parser returned NULL — not a valid payment")
+                return
+            }
+
+            LogManager.add(
+                applicationContext,
+                "DEBUG",
+                "✅ Parser SUCCESS: ${payment.method} ৳${payment.amount} TrxID ${payment.trxId}"
+            )
 
             val now = System.currentTimeMillis()
             pruneOldTrxIds(now)
@@ -102,59 +145,26 @@ class NotificationListener : NotificationListenerService() {
                     "ERROR",
                     "Listener error: ${e.message}"
                 )
-            } catch (_: Exception) {
-            }
+            } catch (_: Exception) { }
         }
     }
 
-    override fun onNotificationRemoved(sbn: StatusBarNotification?) {
-    }
+    override fun onNotificationRemoved(sbn: StatusBarNotification?) { }
 
-    override fun onListenerConnected() {
-        super.onListenerConnected()
-        try {
-            LogManager.add(applicationContext, "INFO", "Notification access connected")
-        } catch (_: Exception) {
-        }
-    }
-
-    override fun onListenerDisconnected() {
-        super.onListenerDisconnected()
-        try {
-            LogManager.add(applicationContext, "INFO", "Notification access disconnected")
-        } catch (_: Exception) {
-        }
-    }
-
-    /**
-     * Checks whether a package name belongs to a known payment provider
-     * OR a known SMS/Messages app.
-     *
-     * Payment apps: bKash, Nagad, Rocket
-     * SMS apps: Google Messages, Android Messages, Samsung Messages, etc.
-     */
     private fun isPaymentSourcePackage(pkg: String): Boolean {
         return when (pkg) {
-            // ─── bKash ───
             "com.bKash.customerapp" -> true
             "com.bkash.customerapp" -> true
-
-            // ─── Nagad ───
             "com.konasl.nagad" -> true
             "com.nagad.app" -> true
-
-            // ─── Rocket (DBBL) ───
             "com.dbbl.mbs.apps.rocket" -> true
             "com.dbbl.mbs" -> true
-
-            // ─── SMS / Messages apps ───
-            "com.google.android.apps.messaging" -> true    // Google Messages
-            "com.android.mms" -> true                      // Legacy Android Messages
-            "com.android.messaging" -> true                // Android Messages
-            "com.samsung.android.messaging" -> true        // Samsung Messages
-            "com.transsion.messaging" -> true              // Infinix / Tecno Messages
-            "com.android.mms.service" -> true              // Some devices
-
+            "com.google.android.apps.messaging" -> true
+            "com.android.mms" -> true
+            "com.android.messaging" -> true
+            "com.samsung.android.messaging" -> true
+            "com.transsion.messaging" -> true
+            "com.android.mms.service" -> true
             else -> false
         }
     }
