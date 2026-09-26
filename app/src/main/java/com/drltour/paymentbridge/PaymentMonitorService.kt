@@ -24,7 +24,7 @@ class PaymentMonitorService : Service() {
         const val ACTION_RESTART = "com.drltour.paymentbridge.RESTART"
 
         private const val RESTART_REQUEST_CODE = 1001
-        private const val RESTART_DELAY_MS = 2000L
+        private const val RESTART_DELAY_MS = 1500L
 
         fun start(context: Context) {
             val intent = Intent(context, PaymentMonitorService::class.java)
