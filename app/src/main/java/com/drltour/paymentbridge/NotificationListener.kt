@@ -32,7 +32,6 @@ class NotificationListener : NotificationListenerService() {
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         try {
-            // 🔍 DEBUG LOG 1: Every notification
             LogManager.add(
                 applicationContext,
                 "DEBUG",
@@ -43,7 +42,6 @@ class NotificationListener : NotificationListenerService() {
 
             val packageName = sbn.packageName ?: return
 
-            // 🔍 DEBUG LOG 2: Package filter check
             val isPaymentSource = isPaymentSourcePackage(packageName)
             LogManager.add(
                 applicationContext,
@@ -71,18 +69,16 @@ class NotificationListener : NotificationListenerService() {
                 .joinToString(" ")
                 .ifBlank { text }
 
-            // 🔍 DEBUG LOG 3: Notification content
             LogManager.add(
                 applicationContext,
                 "DEBUG",
-                "📝 Title: $title | Text: ${combinedText.take(80)}"
+                "📝 Title: $title | Text: ${combinedText.take(120)}"
             )
 
             if (combinedText.isBlank() && title.isBlank()) return
 
             val payment = PaymentParser.parse(title, combinedText)
 
-            // 🔍 DEBUG LOG 4: Parse result
             if (payment == null) {
                 LogManager.add(applicationContext, "DEBUG", "❌ Parser returned NULL — not a valid payment")
                 return
@@ -153,18 +149,32 @@ class NotificationListener : NotificationListenerService() {
 
     private fun isPaymentSourcePackage(pkg: String): Boolean {
         return when (pkg) {
+            // ─── bKash ───
             "com.bKash.customerapp" -> true
             "com.bkash.customerapp" -> true
+
+            // ─── Nagad ───
             "com.konasl.nagad" -> true
             "com.nagad.app" -> true
+
+            // ─── Rocket (DBBL) ───
             "com.dbbl.mbs.apps.rocket" -> true
             "com.dbbl.mbs" -> true
+
+            // ─── Google Messages ───
             "com.google.android.apps.messaging" -> true
+
+            // ─── Infinix / Tecno / Transsion default SMS ───
+            "com.transsion.smartmessage" -> true     // ⭐ আপনার ফোনের SMS app!
+            "com.transsion.messaging" -> true
+            "com.transsion.smart.chat" -> true
+
+            // ─── Other SMS apps ───
             "com.android.mms" -> true
             "com.android.messaging" -> true
             "com.samsung.android.messaging" -> true
-            "com.transsion.messaging" -> true
             "com.android.mms.service" -> true
+
             else -> false
         }
     }
