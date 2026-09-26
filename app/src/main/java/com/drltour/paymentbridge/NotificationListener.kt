@@ -9,7 +9,11 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
 /**
- * NotificationListener — Receives payment notifications from bKash / Nagad / Rocket.
+ * NotificationListener — Receives payment notifications from:
+ *   - bKash / Nagad / Rocket apps
+ *   - SMS apps (Messages) — because bKash SMS also contains TrxID
+ *
+ * The PaymentParser automatically filters out unrelated SMS/promotions.
  */
 class NotificationListener : NotificationListenerService() {
 
@@ -43,6 +47,8 @@ class NotificationListener : NotificationListenerService() {
 
             if (combinedText.isBlank() && title.isBlank()) return
 
+            // Parser handles provider detection (bKash/Nagad/Rocket)
+            // If it's not a payment message, it returns null and we ignore it.
             val payment = PaymentParser.parse(title, combinedText) ?: return
 
             val now = System.currentTimeMillis()
@@ -120,14 +126,35 @@ class NotificationListener : NotificationListenerService() {
         }
     }
 
+    /**
+     * Checks whether a package name belongs to a known payment provider
+     * OR a known SMS/Messages app.
+     *
+     * Payment apps: bKash, Nagad, Rocket
+     * SMS apps: Google Messages, Android Messages, Samsung Messages, etc.
+     */
     private fun isPaymentSourcePackage(pkg: String): Boolean {
         return when (pkg) {
+            // ─── bKash ───
             "com.bKash.customerapp" -> true
             "com.bkash.customerapp" -> true
+
+            // ─── Nagad ───
             "com.konasl.nagad" -> true
             "com.nagad.app" -> true
+
+            // ─── Rocket (DBBL) ───
             "com.dbbl.mbs.apps.rocket" -> true
             "com.dbbl.mbs" -> true
+
+            // ─── SMS / Messages apps ───
+            "com.google.android.apps.messaging" -> true    // Google Messages
+            "com.android.mms" -> true                      // Legacy Android Messages
+            "com.android.messaging" -> true                // Android Messages
+            "com.samsung.android.messaging" -> true        // Samsung Messages
+            "com.transsion.messaging" -> true              // Infinix / Tecno Messages
+            "com.android.mms.service" -> true              // Some devices
+
             else -> false
         }
     }
