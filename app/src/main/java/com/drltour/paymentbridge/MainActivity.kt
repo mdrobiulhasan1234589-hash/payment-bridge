@@ -57,6 +57,12 @@ class MainActivity : AppCompatActivity() {
         if (Prefs.isMonitoringEnabled(this)) {
             PaymentMonitorService.start(this)
         }
+
+        // Auto-check backend connection every time app opens
+        if (Prefs.getBackendUrl(this).isNotBlank() &&
+            Prefs.getBridgeSecret(this).isNotBlank()) {
+            runConnectionTestSilent()
+        }
     }
 
     private fun bindViews() {
@@ -105,9 +111,21 @@ class MainActivity : AppCompatActivity() {
         tvServiceStatus.text = if (serviceRunning) "RUNNING ✓" else "STOPPED"
         tvServiceStatus.setTextColor(getColor(if (serviceRunning) R.color.status_ok else R.color.status_error))
 
-        val lastBackend = Prefs.getBackendUrl(this)
-        tvBackendStatus.text = if (lastBackend.isNotBlank()) "CONFIGURED ✓" else "NOT CONFIGURED"
-        tvBackendStatus.setTextColor(getColor(if (lastBackend.isNotBlank()) R.color.status_ok else R.color.status_warn))
+        // Backend: show current cached state, will be updated by auto-test in onResume
+        val hasUrl = Prefs.getBackendUrl(this).isNotBlank()
+        val hasSecret = Prefs.getBridgeSecret(this).isNotBlank()
+        if (hasUrl && hasSecret) {
+            // Show TESTING placeholder until auto-test completes
+            // (onResume will trigger runConnectionTestSilent which updates this)
+            if (tvBackendStatus.text.isNullOrBlank() ||
+                tvBackendStatus.text == "NOT CONFIGURED") {
+                tvBackendStatus.text = "CHECKING..."
+                tvBackendStatus.setTextColor(getColor(R.color.status_warn))
+            }
+        } else {
+            tvBackendStatus.text = "NOT CONFIGURED"
+            tvBackendStatus.setTextColor(getColor(R.color.status_warn))
+        }
 
         btnStart.isEnabled = !monitoring
         btnStop.isEnabled = monitoring
@@ -191,6 +209,28 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Silent connection test — no toast, just updates the UI.
+     * Called automatically in onResume() to keep backend status fresh.
+     */
+    private fun runConnectionTestSilent() {
+        tvBackendStatus.text = "CHECKING..."
+        tvBackendStatus.setTextColor(getColor(R.color.status_warn))
+
+        activityScope.launch {
+            val result = ApiClient.testConnection(this@MainActivity)
+            withContext(Dispatchers.Main) {
+                if (result.success) {
+                    tvBackendStatus.text = "CONNECTED ✓"
+                    tvBackendStatus.setTextColor(getColor(R.color.status_ok))
+                } else {
+                    tvBackendStatus.text = "FAILED: ${result.status}"
+                    tvBackendStatus.setTextColor(getColor(R.color.status_error))
+                }
+            }
+        }
+    }
+
     private fun showSettingsDialog() {
         val view = layoutInflater.inflate(R.layout.dialog_settings, null)
         val etUrl = view.findViewById<EditText>(R.id.etBackendUrl)
@@ -219,6 +259,8 @@ class MainActivity : AppCompatActivity() {
                 Prefs.setBridgeSecret(this, secret)
                 LogManager.add(this, "INFO", "Settings updated")
                 refreshUiState()
+                // Auto-test after saving
+                runConnectionTestSilent()
                 showToast("Settings saved ✓")
             }
             .setNegativeButton("Cancel", null)
