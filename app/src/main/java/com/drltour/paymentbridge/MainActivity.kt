@@ -1,20 +1,19 @@
 package com.drltour.paymentbridge
 
-import android.content.ComponentName
-import android.content.Context
-import android.content.Intent
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
-import android.text.TextUtils
-import android.view.View
+import android.content.Intent
 import android.widget.Button
 import android.widget.EditText
-import android.widget.ImageView
-import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -37,17 +36,25 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnLogs: Button
     private lateinit var btnHistory: Button
 
+    private val PERMISSION_REQUEST_CODE = 100
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
         bindViews()
         setupListeners()
+        requestNotificationPermissionIfNeeded()
     }
 
     override fun onResume() {
         super.onResume()
         refreshUiState()
+
+        // Auto-start the foreground service if monitoring is enabled
+        if (Prefs.isMonitoringEnabled(this)) {
+            PaymentMonitorService.start(this)
+        }
     }
 
     private fun bindViews() {
@@ -67,13 +74,15 @@ class MainActivity : AppCompatActivity() {
     private fun setupListeners() {
         btnStart.setOnClickListener {
             Prefs.setMonitoringEnabled(this, true)
-            LogManager.add(this, "INFO", "Monitoring enabled")
+            PaymentMonitorService.start(this)
+            LogManager.add(this, "INFO", "Monitoring started via foreground service")
             refreshUiState()
         }
 
         btnStop.setOnClickListener {
             Prefs.setMonitoringEnabled(this, false)
-            LogManager.add(this, "INFO", "Monitoring disabled")
+            PaymentMonitorService.stop(this)
+            LogManager.add(this, "INFO", "Monitoring stopped by user")
             refreshUiState()
         }
 
@@ -168,12 +177,10 @@ class MainActivity : AppCompatActivity() {
             val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
             startActivity(intent)
         } catch (_: Exception) {
-            // Fallback for older devices
             try {
                 val intent = Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")
                 startActivity(intent)
             } catch (_: Exception) {
-                // Last resort — open app details
                 try {
                     val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
                     intent.data = android.net.Uri.parse("package:$packageName")
@@ -267,5 +274,25 @@ class MainActivity : AppCompatActivity() {
 
     private fun showToast(msg: String) {
         android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_SHORT).show()
+    }
+
+    /**
+     * Request POST_NOTIFICATIONS permission on Android 13+.
+     * Required for the foreground service notification to be visible.
+     */
+    private fun requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.POST_NOTIFICATIONS
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                ActivityCompat.requestPermissions(
+                    this,
+                    arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                    PERMISSION_REQUEST_CODE
+                )
+            }
+        }
     }
 }
