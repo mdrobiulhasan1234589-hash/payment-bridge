@@ -2,12 +2,15 @@ package com.drltour.paymentbridge
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.content.Intent
+import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -51,7 +54,6 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         refreshUiState()
 
-        // Auto-start the foreground service if monitoring is enabled
         if (Prefs.isMonitoringEnabled(this)) {
             PaymentMonitorService.start(this)
         }
@@ -107,27 +109,20 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * Refresh all UI state — call from onResume and after button actions.
-     */
     private fun refreshUiState() {
-        // Notification Access
         val hasAccess = isNotificationAccessGranted()
         tvAccessStatus.text = if (hasAccess) "CONNECTED ✓" else "NOT CONNECTED"
         tvAccessStatus.setTextColor(getColor(if (hasAccess) R.color.status_ok else R.color.status_error))
 
-        // Service (monitoring) status
         val monitoring = Prefs.isMonitoringEnabled(this)
         val serviceRunning = hasAccess && monitoring
         tvServiceStatus.text = if (serviceRunning) "RUNNING ✓" else "STOPPED"
         tvServiceStatus.setTextColor(getColor(if (serviceRunning) R.color.status_ok else R.color.status_error))
 
-        // Backend status (cached result — Test button updates this)
         val lastBackend = Prefs.getBackendUrl(this)
         tvBackendStatus.text = if (lastBackend.isNotBlank()) "CONFIGURED ✓" else "NOT CONFIGURED"
         tvBackendStatus.setTextColor(getColor(if (lastBackend.isNotBlank()) R.color.status_ok else R.color.status_warn))
 
-        // Enable/disable start/stop buttons based on state
         btnStart.isEnabled = !monitoring
         btnStop.isEnabled = monitoring
 
@@ -185,9 +180,7 @@ class MainActivity : AppCompatActivity() {
                     val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
                     intent.data = android.net.Uri.parse("package:$packageName")
                     startActivity(intent)
-                } catch (_: Exception) {
-                    // Give up silently
-                }
+                } catch (_: Exception) { }
             }
         }
     }
@@ -246,19 +239,60 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    /**
+     * SHOW LOGS — Custom dialog with BLACK background and WHITE text.
+     * Scrollable so the user can read all entries.
+     */
     private fun showLogsDialog() {
         val logs = LogManager.getList(this)
         val message = if (logs.isEmpty()) "No logs yet" else logs.joinToString("\n\n")
 
-        AlertDialog.Builder(this)
-            .setTitle("Logs")
-            .setMessage(message)
+        // Build a custom view with proper colors
+        val scrollView = ScrollView(this).apply {
+            setPadding(40, 40, 40, 40)
+            setBackgroundColor(Color.parseColor("#0A0A1A"))
+        }
+
+        val textView = TextView(this).apply {
+            text = message
+            setTextColor(Color.parseColor("#FFFFFF"))
+            textSize = 12f
+            setLineSpacing(8f, 1f)
+            setPadding(10, 10, 10, 10)
+            setTextIsSelectable(true)
+        }
+
+        scrollView.addView(
+            textView,
+            ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        )
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("📋 Logs")
+            .setView(scrollView)
             .setPositiveButton("Close", null)
             .setNeutralButton("Clear") { _, _ ->
                 LogManager.clear(this)
                 showToast("Logs cleared")
             }
-            .show()
+            .create()
+
+        dialog.setOnShowListener {
+            // Style the dialog window background to dark
+            dialog.window?.setBackgroundDrawableResource(android.R.color.background_dark)
+            // Style title and buttons colors
+            val titleId = resources.getIdentifier("alertTitle", "id", "android")
+            if (titleId > 0) {
+                dialog.findViewById<TextView>(titleId)?.setTextColor(Color.WHITE)
+            }
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.setTextColor(Color.parseColor("#3355FF"))
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL)?.setTextColor(Color.parseColor("#FF9800"))
+        }
+
+        dialog.show()
     }
 
     private fun showHistoryDialog() {
@@ -276,10 +310,6 @@ class MainActivity : AppCompatActivity() {
         android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_SHORT).show()
     }
 
-    /**
-     * Request POST_NOTIFICATIONS permission on Android 13+.
-     * Required for the foreground service notification to be visible.
-     */
     private fun requestNotificationPermissionIfNeeded() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(
