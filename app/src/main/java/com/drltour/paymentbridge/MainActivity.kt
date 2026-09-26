@@ -88,25 +88,11 @@ class MainActivity : AppCompatActivity() {
             refreshUiState()
         }
 
-        btnOpenAccess.setOnClickListener {
-            openNotificationAccessSettings()
-        }
-
-        btnTestConnection.setOnClickListener {
-            runConnectionTest()
-        }
-
-        btnSettings.setOnClickListener {
-            showSettingsDialog()
-        }
-
-        btnLogs.setOnClickListener {
-            showLogsDialog()
-        }
-
-        btnHistory.setOnClickListener {
-            showHistoryDialog()
-        }
+        btnOpenAccess.setOnClickListener { openNotificationAccessSettings() }
+        btnTestConnection.setOnClickListener { runConnectionTest() }
+        btnSettings.setOnClickListener { showSettingsDialog() }
+        btnLogs.setOnClickListener { showLogsDialog() }
+        btnHistory.setOnClickListener { showHistoryDialog() }
     }
 
     private fun refreshUiState() {
@@ -239,15 +225,10 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    /**
-     * SHOW LOGS — Custom dialog with BLACK background and WHITE text.
-     * Scrollable so the user can read all entries.
-     */
     private fun showLogsDialog() {
         val logs = LogManager.getList(this)
         val message = if (logs.isEmpty()) "No logs yet" else logs.joinToString("\n\n")
 
-        // Build a custom view with proper colors
         val scrollView = ScrollView(this).apply {
             setPadding(40, 40, 40, 40)
             setBackgroundColor(Color.parseColor("#0A0A1A"))
@@ -281,9 +262,7 @@ class MainActivity : AppCompatActivity() {
             .create()
 
         dialog.setOnShowListener {
-            // Style the dialog window background to dark
             dialog.window?.setBackgroundDrawableResource(android.R.color.background_dark)
-            // Style title and buttons colors
             val titleId = resources.getIdentifier("alertTitle", "id", "android")
             if (titleId > 0) {
                 dialog.findViewById<TextView>(titleId)?.setTextColor(Color.WHITE)
