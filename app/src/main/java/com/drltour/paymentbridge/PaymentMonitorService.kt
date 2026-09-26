@@ -1,5 +1,6 @@
 package com.drltour.paymentbridge
 
+import android.app.AlarmManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -9,14 +10,13 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
+import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 
 /**
  * PaymentMonitorService — A foreground service that keeps the app alive
- * in the background.
- *
- * Displays a persistent notification with START/STOP controls.
- * The notification cannot be dismissed while the service is running.
+ * in the background, and RESTARTS itself if killed or if the app is
+ * swiped away from Recents.
  */
 class PaymentMonitorService : Service() {
 
@@ -26,6 +26,11 @@ class PaymentMonitorService : Service() {
 
         const val ACTION_START = "com.drltour.paymentbridge.START"
         const val ACTION_STOP = "com.drltour.paymentbridge.STOP"
+        const val ACTION_RESTART = "com.drltour.paymentbridge.RESTART"
+
+        // Unique request code for the AlarmManager restart
+        private const val RESTART_REQUEST_CODE = 1001
+        private const val RESTART_DELAY_MS = 2000L  // 2 seconds
 
         fun start(context: Context) {
             val intent = Intent(context, PaymentMonitorService::class.java)
@@ -42,6 +47,64 @@ class PaymentMonitorService : Service() {
             intent.action = ACTION_STOP
             context.startService(intent)
         }
+
+        /**
+         * Schedule an alarm that will restart the service after a short delay.
+         * Used when the service is killed by the system, or when the user swipes
+         * the app away from the Recents list.
+         */
+        fun scheduleRestart(context: Context) {
+            try {
+                val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+                val intent = Intent(context, PaymentMonitorService::class.java).apply {
+                    action = ACTION_RESTART
+                }
+                val pendingIntent = PendingIntent.getService(
+                    context,
+                    RESTART_REQUEST_CODE,
+                    intent,
+                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+                )
+
+                val triggerAt = SystemClock.elapsedRealtime() + RESTART_DELAY_MS
+
+                // Prefer setExactAndAllowWhileIdle for reliable restart even in Doze mode
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    alarmManager.setExactAndAllowWhileIdle(
+                        AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                        triggerAt,
+                        pendingIntent
+                    )
+                } else {
+                    alarmManager.setExact(
+                        AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                        triggerAt,
+                        pendingIntent
+                    )
+                }
+            } catch (_: Exception) {
+                // If setExact fails (e.g. permission missing), fall back to a normal alarm
+                try {
+                    val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+                    val intent = Intent(context, PaymentMonitorService::class.java).apply {
+                        action = ACTION_RESTART
+                    }
+                    val pendingIntent = PendingIntent.getService(
+                        context,
+                        RESTART_REQUEST_CODE,
+                        intent,
+                        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+                    )
+                    alarmManager.set(
+                        AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                        SystemClock.elapsedRealtime() + RESTART_DELAY_MS,
+                        pendingIntent
+                    )
+                } catch (_: Exception) {
+                    // give up
+                }
+            }
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -55,37 +118,76 @@ class PaymentMonitorService : Service() {
         when (intent?.action) {
             ACTION_STOP -> {
                 Prefs.setMonitoringEnabled(this, false)
+                // Cancel any pending restart alarm
+                cancelRestartAlarm()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
                 return START_NOT_STICKY
             }
+
+            ACTION_RESTART -> {
+                // This is called by AlarmManager after the service was killed
+                if (Prefs.isMonitoringEnabled(this)) {
+                    try {
+                        startForeground(NOTIFICATION_ID, buildNotification())
+                    } catch (_: Exception) { }
+                }
+                return START_STICKY
+            }
+
             else -> {
-                // ACTION_START or null (service restarted)
+                // ACTION_START or null (system restart)
                 Prefs.setMonitoringEnabled(this, true)
-                startForeground(NOTIFICATION_ID, buildNotification())
+                try {
+                    startForeground(NOTIFICATION_ID, buildNotification())
+                } catch (_: Exception) { }
                 return START_STICKY
             }
         }
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        // If the service is being destroyed by the system (not by user),
-        // restart it via START_STICKY in onStartCommand. If user stopped it,
-        // monitoring will be false and we won't restart.
+    /**
+     * Called when the user removes the app from the Recents list (swipes it away).
+     * We schedule an alarm to bring the service back up shortly after.
+     */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+
         if (Prefs.isMonitoringEnabled(this)) {
-            val restartIntent = Intent(this, PaymentMonitorService::class.java)
-            restartIntent.action = ACTION_START
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(restartIntent)
-            } else {
-                startService(restartIntent)
-            }
+            // Schedule a restart
+            scheduleRestart(this)
         }
     }
 
+    /**
+     * Called when the service is destroyed (either by system or by user stop).
+     */
+    override fun onDestroy() {
+        super.onDestroy()
+
+        // If the user has NOT explicitly stopped monitoring, schedule a restart
+        if (Prefs.isMonitoringEnabled(this)) {
+            scheduleRestart(this)
+        }
+    }
+
+    private fun cancelRestartAlarm() {
+        try {
+            val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+            val intent = Intent(this, PaymentMonitorService::class.java).apply {
+                action = ACTION_RESTART
+            }
+            val pendingIntent = PendingIntent.getService(
+                this,
+                RESTART_REQUEST_CODE,
+                intent,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+            alarmManager.cancel(pendingIntent)
+        } catch (_: Exception) { }
+    }
+
     private fun buildNotification(): Notification {
-        // Main activity intent
         val openIntent = Intent(this, MainActivity::class.java)
         openIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
         val openPending = PendingIntent.getActivity(
@@ -95,7 +197,6 @@ class PaymentMonitorService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
-        // STOP action intent
         val stopIntent = Intent(this, PaymentMonitorService::class.java)
         stopIntent.action = ACTION_STOP
         val stopPending = PendingIntent.getService(
@@ -105,7 +206,6 @@ class PaymentMonitorService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
-        // START action intent (used to re-enable from notification if needed)
         val startIntent = Intent(this, PaymentMonitorService::class.java)
         startIntent.action = ACTION_START
         val startPending = PendingIntent.getService(
@@ -125,7 +225,7 @@ class PaymentMonitorService : Service() {
             )
             .setSmallIcon(android.R.drawable.stat_notify_sync)
             .setContentIntent(openPending)
-            .setOngoing(true)          // cannot be dismissed
+            .setOngoing(true)
             .setAutoCancel(false)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
