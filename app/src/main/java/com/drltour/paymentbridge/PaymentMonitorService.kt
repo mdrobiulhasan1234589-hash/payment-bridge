@@ -194,7 +194,7 @@ class PaymentMonitorService : Service() {
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val name = "Payment Monitor"
-            val descriptionText = "Keeps Payment Bridge running in the background"
+            val descriptionText = "Keeps Payment Bridge running in background"
             val importance = NotificationManager.IMPORTANCE_LOW
             val channel = NotificationChannel(CHANNEL_ID, name, importance).apply {
                 description = descriptionText
