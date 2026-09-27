@@ -3,17 +3,17 @@ package com.drltour.paymentbridge
 import android.content.Context
 import android.content.SharedPreferences
 
-/**
- * Prefs — Simple SharedPreferences wrapper for storing app settings.
- * Stores: backend URL, bridge secret, monitoring enabled/disabled.
- */
 object Prefs {
 
     private const val PREF_NAME = "payment_bridge_prefs"
+
     private const val KEY_BACKEND_URL = "backend_url"
     private const val KEY_BRIDGE_SECRET = "bridge_secret"
     private const val KEY_MONITORING = "monitoring_enabled"
     private const val KEY_LAST_PAYMENT = "last_payment_summary"
+    private const val KEY_BACKEND_CONNECTED = "backend_connected"
+    private const val KEY_BACKEND_LAST_CHECK = "backend_last_check"
+    private const val KEY_BACKEND_CACHED_URL = "backend_cached_url"
 
     private fun get(context: Context): SharedPreferences {
         return context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
@@ -24,7 +24,19 @@ object Prefs {
     }
 
     fun setBackendUrl(context: Context, url: String) {
-        get(context).edit().putString(KEY_BACKEND_URL, url.trim()).apply()
+        val trimmed = url.trim()
+        // If URL changed, invalidate connection cache
+        val old = getBackendUrl(context)
+        if (old != trimmed) {
+            get(context).edit()
+                .putString(KEY_BACKEND_URL, trimmed)
+                .remove(KEY_BACKEND_CONNECTED)
+                .remove(KEY_BACKEND_LAST_CHECK)
+                .putString(KEY_BACKEND_CACHED_URL, trimmed)
+                .apply()
+        } else {
+            get(context).edit().putString(KEY_BACKEND_URL, trimmed).apply()
+        }
     }
 
     fun getBridgeSecret(context: Context): String {
@@ -51,8 +63,32 @@ object Prefs {
         get(context).edit().putString(KEY_LAST_PAYMENT, summary).apply()
     }
 
-    // ⚠️ Default backend URL — user Settings থেকে পরিবর্তন করতে পারবে
-    // এটা আপনার Supabase Edge Function-এর URL
+    // ─── Backend Connection Cache ───
+
+    fun isBackendConnected(context: Context): Boolean {
+        // Invalidate if URL changed
+        val cachedUrl = get(context).getString(KEY_BACKEND_CACHED_URL, "") ?: ""
+        val currentUrl = getBackendUrl(context)
+        if (cachedUrl != currentUrl) return false
+
+        return get(context).getBoolean(KEY_BACKEND_CONNECTED, false)
+    }
+
+    fun setBackendConnected(context: Context, value: Boolean) {
+        get(context).edit()
+            .putBoolean(KEY_BACKEND_CONNECTED, value)
+            .putString(KEY_BACKEND_CACHED_URL, getBackendUrl(context))
+            .apply()
+    }
+
+    fun getBackendLastCheck(context: Context): Long {
+        return get(context).getLong(KEY_BACKEND_LAST_CHECK, 0L)
+    }
+
+    fun setBackendLastCheck(context: Context, value: Long) {
+        get(context).edit().putLong(KEY_BACKEND_LAST_CHECK, value).apply()
+    }
+
     const val DEFAULT_BACKEND_URL =
-        "https://ekecrhimsolyufupstzv.supabase.co/functions/v1/payment-bridge"
+        "https://ekecrhimsolyufupstzv.supabase.co/functions/v1/dynamic-endpoint"
 }
