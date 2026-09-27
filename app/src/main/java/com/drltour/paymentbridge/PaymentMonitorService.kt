@@ -8,12 +8,16 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
 import android.os.IBinder
 import android.os.SystemClock
+import android.provider.Telephony
 import androidx.core.app.NotificationCompat
 
 class PaymentMonitorService : Service() {
+
+    private var smsReceiver: SmsReceiver? = null
 
     companion object {
         const val CHANNEL_ID = "payment_bridge_monitor"
@@ -86,6 +90,38 @@ class PaymentMonitorService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        registerSmsReceiver()
+    }
+
+    /**
+     * Runtime-registered SMS receiver — works on Android 13/14/15/16 even
+     * with the most aggressive background restrictions.
+     */
+    private fun registerSmsReceiver() {
+        try {
+            if (smsReceiver != null) return
+            smsReceiver = SmsReceiver()
+            val filter = IntentFilter(Telephony.Sms.Intents.SMS_RECEIVED_ACTION)
+            filter.priority = IntentFilter.SYSTEM_HIGH_PRIORITY
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(smsReceiver, filter, Context.RECEIVER_EXPORTED)
+            } else {
+                @Suppress("UnspecifiedRegisterReceiverFlag")
+                registerReceiver(smsReceiver, filter)
+            }
+            LogManager.add(this, "INFO", "SMS Receiver registered (runtime)")
+        } catch (e: Exception) {
+            LogManager.add(this, "ERROR", "registerSmsReceiver failed: ${e.message}")
+        }
+    }
+
+    private fun unregisterSmsReceiver() {
+        try {
+            if (smsReceiver != null) {
+                unregisterReceiver(smsReceiver)
+                smsReceiver = null
+            }
+        } catch (_: Exception) { }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -93,6 +129,7 @@ class PaymentMonitorService : Service() {
             ACTION_STOP -> {
                 Prefs.setMonitoringEnabled(this, false)
                 cancelRestartAlarm()
+                unregisterSmsReceiver()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
                 return START_NOT_STICKY
@@ -101,6 +138,7 @@ class PaymentMonitorService : Service() {
                 if (Prefs.isMonitoringEnabled(this)) {
                     try {
                         startForeground(NOTIFICATION_ID, buildNotification())
+                        registerSmsReceiver()
                     } catch (_: Exception) { }
                 }
                 return START_STICKY
@@ -109,6 +147,7 @@ class PaymentMonitorService : Service() {
                 Prefs.setMonitoringEnabled(this, true)
                 try {
                     startForeground(NOTIFICATION_ID, buildNotification())
+                    registerSmsReceiver()
                 } catch (_: Exception) { }
                 return START_STICKY
             }
@@ -124,6 +163,7 @@ class PaymentMonitorService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        unregisterSmsReceiver()
         if (Prefs.isMonitoringEnabled(this)) {
             scheduleRestart(this)
         }
