@@ -46,6 +46,7 @@ class NotificationListener : NotificationListenerService() {
             val subText = safeString(extras.getCharSequence(Notification.EXTRA_SUB_TEXT))
             val infoText = safeString(extras.getCharSequence(Notification.EXTRA_INFO_TEXT))
             val summaryText = safeString(extras.getCharSequence(Notification.EXTRA_SUMMARY_TEXT))
+            val conversationTitle = safeString(extras.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE))
             val textLines = extras.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)
                 ?.joinToString(" ") { safeString(it) } ?: ""
 
@@ -54,15 +55,22 @@ class NotificationListener : NotificationListenerService() {
                 .joinToString(" ")
                 .ifBlank { text }
 
+            // Also include conversation title if this is a messaging notification
+            val combinedTitle = if (conversationTitle.isNotBlank()) {
+                "$title $conversationTitle".trim()
+            } else {
+                title
+            }
+
             LogManager.add(
                 applicationContext,
                 "DEBUG",
-                "📝 Title: $title | Text: ${combinedText.take(200)}"
+                "📝 Title: $combinedTitle | Text: ${combinedText.take(200)}"
             )
 
-            if (combinedText.isBlank() && title.isBlank()) return
+            if (combinedText.isBlank() && combinedTitle.isBlank()) return
 
-            val payment = PaymentParser.parse(title, combinedText) { logMsg ->
+            val payment = PaymentParser.parse(combinedTitle, combinedText) { logMsg ->
                 LogManager.add(applicationContext, "DEBUG", logMsg)
             }
 
@@ -71,12 +79,12 @@ class NotificationListener : NotificationListenerService() {
                 return
             }
 
-            // SHARED duplicate check — same as SmsReceiver (avoids double-send)
+            // SHARED duplicate check — same as SmsReceiver
             if (SmsReceiver.isDuplicate(applicationContext, payment.trxId)) {
                 LogManager.add(
                     applicationContext,
                     "DUPLICATE",
-                    "Ignored duplicate TrxID (Notification): ${PaymentParser.maskTrxId(payment.trxId)}"
+                    "Ignored duplicate (Notification): ${PaymentParser.maskTrxId(payment.trxId)}"
                 )
                 return
             }
@@ -131,17 +139,35 @@ class NotificationListener : NotificationListenerService() {
     }
 
     /**
-     * Payment apps only — SMS is handled by SmsReceiver instead.
+     * Payment apps + SMS/Messages apps.
+     * Both kinds are monitored — payment app notifications AND SMS app notifications.
      */
     private fun isPaymentSourcePackage(pkg: String): Boolean {
-        return when (pkg) {
-            "com.bKash.customerapp" -> true
-            "com.bkash.customerapp" -> true
-            "com.konasl.nagad" -> true
-            "com.nagad.app" -> true
-            "com.dbbl.mbs.apps.rocket" -> true
-            "com.dbbl.mbs" -> true
-            else -> false
-        }
+        // ─── Payment apps ───
+        if (pkg == "com.bKash.customerapp") return true
+        if (pkg == "com.bkash.customerapp") return true
+        if (pkg == "com.konasl.nagad") return true
+        if (pkg == "com.nagad.app") return true
+        if (pkg == "com.dbbl.mbs.apps.rocket") return true
+        if (pkg == "com.dbbl.mbs") return true
+
+        // ─── SMS / Messages apps ───
+        // Infinix / Tecno / Transsion default SMS app
+        if (pkg == "com.transsion.smartmessage") return true
+        if (pkg == "com.transsion.messaging") return true
+        if (pkg == "com.transsion.smart.chat") return true
+
+        // Google Messages (including versioned dynamic package)
+        if (pkg == "com.google.android.apps.messaging") return true
+        if (pkg.startsWith("messages.android_")) return true
+        if (pkg.startsWith("com.google.android.apps.messaging")) return true
+
+        // Other common SMS apps
+        if (pkg == "com.android.mms") return true
+        if (pkg == "com.android.messaging") return true
+        if (pkg == "com.samsung.android.messaging") return true
+        if (pkg == "com.android.mms.service") return true
+
+        return false
     }
 }
