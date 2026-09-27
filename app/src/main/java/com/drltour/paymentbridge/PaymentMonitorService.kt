@@ -94,8 +94,7 @@ class PaymentMonitorService : Service() {
     }
 
     /**
-     * Runtime-registered SMS receiver — works on Android 13/14/15/16 even
-     * with the most aggressive background restrictions.
+     * Runtime-registered SMS receiver — Android 16 compatible.
      */
     private fun registerSmsReceiver() {
         try {
@@ -109,7 +108,7 @@ class PaymentMonitorService : Service() {
                 @Suppress("UnspecifiedRegisterReceiverFlag")
                 registerReceiver(smsReceiver, filter)
             }
-            LogManager.add(this, "INFO", "SMS Receiver registered (runtime)")
+            LogManager.add(this, "INFO", "✅ SMS Receiver REGISTERED (runtime)")
         } catch (e: Exception) {
             LogManager.add(this, "ERROR", "registerSmsReceiver failed: ${e.message}")
         }
