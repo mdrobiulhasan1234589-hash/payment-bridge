@@ -12,10 +12,6 @@ class NotificationListener : NotificationListenerService() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    private val recentTrxIds = LinkedHashMap<String, Long>()
-    private val TRX_MEMORY_WINDOW_MS = 10 * 60 * 1000L
-    private val MAX_RECENT = 100
-
     override fun onListenerConnected() {
         super.onListenerConnected()
         try {
@@ -35,13 +31,9 @@ class NotificationListener : NotificationListenerService() {
             if (sbn == null) return
 
             val packageName = sbn.packageName ?: return
-
             if (!isPaymentSourcePackage(packageName)) return
 
-            if (!Prefs.isMonitoringEnabled(applicationContext)) {
-                LogManager.add(applicationContext, "DEBUG", "⚠️ Monitoring disabled")
-                return
-            }
+            if (!Prefs.isMonitoringEnabled(applicationContext)) return
 
             LogManager.add(applicationContext, "DEBUG", "📩 Notification from: $packageName")
 
@@ -79,26 +71,20 @@ class NotificationListener : NotificationListenerService() {
                 return
             }
 
-            val now = System.currentTimeMillis()
-            pruneOldTrxIds(now)
-
-            synchronized(recentTrxIds) {
-                val lastSeen = recentTrxIds[payment.trxId]
-                if (lastSeen != null && (now - lastSeen) < TRX_MEMORY_WINDOW_MS) {
-                    LogManager.add(
-                        applicationContext,
-                        "DUPLICATE",
-                        "Ignored duplicate: ${PaymentParser.maskTrxId(payment.trxId)}"
-                    )
-                    return
-                }
-                recentTrxIds[payment.trxId] = now
+            // SHARED duplicate check — same as SmsReceiver (avoids double-send)
+            if (SmsReceiver.isDuplicate(applicationContext, payment.trxId)) {
+                LogManager.add(
+                    applicationContext,
+                    "DUPLICATE",
+                    "Ignored duplicate TrxID (Notification): ${PaymentParser.maskTrxId(payment.trxId)}"
+                )
+                return
             }
 
             LogManager.add(
                 applicationContext,
                 "PARSED",
-                "${payment.method.uppercase()} ৳${payment.amount} from " +
+                "NOTIF ${payment.method.uppercase()} ৳${payment.amount} from " +
                         "${PaymentParser.maskPhone(payment.senderPhone)} " +
                         "TrxID ${PaymentParser.maskTrxId(payment.trxId)}"
             )
@@ -110,15 +96,19 @@ class NotificationListener : NotificationListenerService() {
                     LogManager.add(
                         applicationContext,
                         "SENT",
-                        "Server: ${result.status} — ${PaymentParser.maskTrxId(payment.trxId)}"
+                        "NOTIF → Server: ${result.status} — ${PaymentParser.maskTrxId(payment.trxId)}"
                     )
-                    val summary = buildSummary(payment, result.status)
+                    val timeFormat = java.text.SimpleDateFormat("hh:mm:ss a", java.util.Locale.US)
+                    val maskedPhone = PaymentParser.maskPhone(payment.senderPhone)
+                    val maskedTrx = PaymentParser.maskTrxId(payment.trxId)
+                    val summary =
+                        "${result.status}|${payment.method}|${payment.amount}|$maskedPhone|$maskedTrx|${timeFormat.format(java.util.Date())}"
                     Prefs.setLastPaymentSummary(applicationContext, summary)
                 } else {
                     LogManager.add(
                         applicationContext,
                         "ERROR",
-                        "Send failed: ${result.status} — ${result.message}"
+                        "NOTIF send failed: ${result.status} — ${result.message}"
                     )
                 }
             }
@@ -141,63 +131,17 @@ class NotificationListener : NotificationListenerService() {
     }
 
     /**
-     * Payment apps AND Messages apps — full text is more reliable.
+     * Payment apps only — SMS is handled by SmsReceiver instead.
      */
     private fun isPaymentSourcePackage(pkg: String): Boolean {
         return when (pkg) {
-            // bKash
             "com.bKash.customerapp" -> true
             "com.bkash.customerapp" -> true
-
-            // Nagad
             "com.konasl.nagad" -> true
             "com.nagad.app" -> true
-
-            // Rocket
             "com.dbbl.mbs.apps.rocket" -> true
             "com.dbbl.mbs" -> true
-
-            // Messages / SMS apps
-            "com.google.android.apps.messaging" -> true
-            "com.android.mms" -> true
-            "com.android.messaging" -> true
-            "com.samsung.android.messaging" -> true
-            "com.transsion.smartmessage" -> true
-            "com.transsion.messaging" -> true
-            "com.transsion.smart.chat" -> true
-            "com.android.mms.service" -> true
-
             else -> false
-        }
-    }
-
-    private fun pruneOldTrxIds(now: Long) {
-        synchronized(recentTrxIds) {
-            val iterator = recentTrxIds.entries.iterator()
-            while (iterator.hasNext()) {
-                val entry = iterator.next()
-                if ((now - entry.value) > TRX_MEMORY_WINDOW_MS) {
-                    iterator.remove()
-                }
-            }
-            while (recentTrxIds.size > MAX_RECENT) {
-                val firstKey = recentTrxIds.keys.firstOrNull() ?: break
-                recentTrxIds.remove(firstKey)
-            }
-        }
-    }
-
-    private fun buildSummary(
-        payment: PaymentParser.PaymentData,
-        status: String
-    ): String {
-        return try {
-            val timeFormat = java.text.SimpleDateFormat("hh:mm:ss a", java.util.Locale.US)
-            val maskedPhone = PaymentParser.maskPhone(payment.senderPhone)
-            val maskedTrx = PaymentParser.maskTrxId(payment.trxId)
-            "$status|${payment.method}|${payment.amount}|$maskedPhone|$maskedTrx|${timeFormat.format(java.util.Date())}"
-        } catch (_: Exception) {
-            ""
         }
     }
 }
