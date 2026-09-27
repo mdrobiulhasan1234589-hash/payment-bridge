@@ -39,7 +39,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnLogs: Button
     private lateinit var btnHistory: Button
 
-    private val PERMISSION_REQUEST_CODE = 100
+    private val NOTIF_PERMISSION_CODE = 201
+    private var lastTestTime = 0L
+    private val TEST_CACHE_MS = 60_000L // 1 minute
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -52,15 +54,21 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+
+        // Show cached state immediately (no "CHECKING" flash)
         refreshUiState()
 
         if (Prefs.isMonitoringEnabled(this)) {
             PaymentMonitorService.start(this)
         }
 
-        // Auto-check backend connection every time app opens
+        // Silent re-test in background only if cache is older than 1 minute
+        val now = System.currentTimeMillis()
+        val lastCheck = Prefs.getBackendLastCheck(this)
         if (Prefs.getBackendUrl(this).isNotBlank() &&
-            Prefs.getBridgeSecret(this).isNotBlank()) {
+            Prefs.getBridgeSecret(this).isNotBlank() &&
+            (now - lastCheck) > TEST_CACHE_MS
+        ) {
             runConnectionTestSilent()
         }
     }
@@ -101,6 +109,9 @@ class MainActivity : AppCompatActivity() {
         btnHistory.setOnClickListener { showHistoryDialog() }
     }
 
+    /**
+     * Refresh UI using CACHED values — no "CHECKING..." flash.
+     */
     private fun refreshUiState() {
         val hasAccess = isNotificationAccessGranted()
         tvAccessStatus.text = if (hasAccess) "CONNECTED ✓" else "NOT CONNECTED"
@@ -111,16 +122,23 @@ class MainActivity : AppCompatActivity() {
         tvServiceStatus.text = if (serviceRunning) "RUNNING ✓" else "STOPPED"
         tvServiceStatus.setTextColor(getColor(if (serviceRunning) R.color.status_ok else R.color.status_error))
 
-        // Backend: show current cached state, will be updated by auto-test in onResume
+        // ─── Backend Status: use CACHE, no flash ───
         val hasUrl = Prefs.getBackendUrl(this).isNotBlank()
         val hasSecret = Prefs.getBridgeSecret(this).isNotBlank()
+
         if (hasUrl && hasSecret) {
-            // Show TESTING placeholder until auto-test completes
-            // (onResume will trigger runConnectionTestSilent which updates this)
-            if (tvBackendStatus.text.isNullOrBlank() ||
-                tvBackendStatus.text == "NOT CONFIGURED") {
-                tvBackendStatus.text = "CHECKING..."
-                tvBackendStatus.setTextColor(getColor(R.color.status_warn))
+            if (Prefs.isBackendConnected(this)) {
+                tvBackendStatus.text = "CONNECTED ✓"
+                tvBackendStatus.setTextColor(getColor(R.color.status_ok))
+            } else {
+                val lastCheck = Prefs.getBackendLastCheck(this)
+                if (lastCheck > 0) {
+                    tvBackendStatus.text = "FAILED"
+                    tvBackendStatus.setTextColor(getColor(R.color.status_error))
+                } else {
+                    tvBackendStatus.text = "NOT TESTED"
+                    tvBackendStatus.setTextColor(getColor(R.color.status_warn))
+                }
             }
         } else {
             tvBackendStatus.text = "NOT CONFIGURED"
@@ -189,6 +207,9 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Manual test — button click, shows toast.
+     */
     private fun runConnectionTest() {
         tvBackendStatus.text = "TESTING..."
         tvBackendStatus.setTextColor(getColor(R.color.status_warn))
@@ -196,6 +217,9 @@ class MainActivity : AppCompatActivity() {
         activityScope.launch {
             val result = ApiClient.testConnection(this@MainActivity)
             withContext(Dispatchers.Main) {
+                Prefs.setBackendLastCheck(this@MainActivity, System.currentTimeMillis())
+                Prefs.setBackendConnected(this@MainActivity, result.success)
+
                 if (result.success) {
                     tvBackendStatus.text = "CONNECTED ✓"
                     tvBackendStatus.setTextColor(getColor(R.color.status_ok))
@@ -210,22 +234,26 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Silent connection test — no toast, just updates the UI.
-     * Called automatically in onResume() to keep backend status fresh.
+     * Silent test — no "CHECKING..." flash, no toast.
+     * Updates cache in background; only changes UI if status actually changed.
      */
     private fun runConnectionTestSilent() {
-        tvBackendStatus.text = "CHECKING..."
-        tvBackendStatus.setTextColor(getColor(R.color.status_warn))
-
         activityScope.launch {
             val result = ApiClient.testConnection(this@MainActivity)
             withContext(Dispatchers.Main) {
-                if (result.success) {
-                    tvBackendStatus.text = "CONNECTED ✓"
-                    tvBackendStatus.setTextColor(getColor(R.color.status_ok))
-                } else {
-                    tvBackendStatus.text = "FAILED: ${result.status}"
-                    tvBackendStatus.setTextColor(getColor(R.color.status_error))
+                val wasConnected = Prefs.isBackendConnected(this@MainActivity)
+                Prefs.setBackendLastCheck(this@MainActivity, System.currentTimeMillis())
+                Prefs.setBackendConnected(this@MainActivity, result.success)
+
+                // Only update UI if status changed (no flash if same)
+                if (result.success != wasConnected || tvBackendStatus.text.isNullOrBlank()) {
+                    if (result.success) {
+                        tvBackendStatus.text = "CONNECTED ✓"
+                        tvBackendStatus.setTextColor(getColor(R.color.status_ok))
+                    } else {
+                        tvBackendStatus.text = "FAILED"
+                        tvBackendStatus.setTextColor(getColor(R.color.status_error))
+                    }
                 }
             }
         }
@@ -258,9 +286,13 @@ class MainActivity : AppCompatActivity() {
                 Prefs.setBackendUrl(this, url)
                 Prefs.setBridgeSecret(this, secret)
                 LogManager.add(this, "INFO", "Settings updated")
-                refreshUiState()
-                // Auto-test after saving
+
+                // Invalidate cache and test in background
+                Prefs.setBackendConnected(this, false)
+                Prefs.setBackendLastCheck(this, 0L)
                 runConnectionTestSilent()
+
+                refreshUiState()
                 showToast("Settings saved ✓")
             }
             .setNegativeButton("Cancel", null)
@@ -341,7 +373,7 @@ class MainActivity : AppCompatActivity() {
                 ActivityCompat.requestPermissions(
                     this,
                     arrayOf(Manifest.permission.POST_NOTIFICATIONS),
-                    PERMISSION_REQUEST_CODE
+                    NOTIF_PERMISSION_CODE
                 )
             }
         }
