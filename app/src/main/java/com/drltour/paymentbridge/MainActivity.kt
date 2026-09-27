@@ -39,9 +39,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnLogs: Button
     private lateinit var btnHistory: Button
 
+    private val SMS_PERMISSION_CODE = 200
     private val NOTIF_PERMISSION_CODE = 201
     private var lastTestTime = 0L
-    private val TEST_CACHE_MS = 60_000L // 1 minute
+    private val TEST_CACHE_MS = 60_000L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -50,19 +51,17 @@ class MainActivity : AppCompatActivity() {
         bindViews()
         setupListeners()
         requestNotificationPermissionIfNeeded()
+        requestSmsPermissionIfNeeded()
     }
 
     override fun onResume() {
         super.onResume()
-
-        // Show cached state immediately (no "CHECKING" flash)
         refreshUiState()
 
         if (Prefs.isMonitoringEnabled(this)) {
             PaymentMonitorService.start(this)
         }
 
-        // Silent re-test in background only if cache is older than 1 minute
         val now = System.currentTimeMillis()
         val lastCheck = Prefs.getBackendLastCheck(this)
         if (Prefs.getBackendUrl(this).isNotBlank() &&
@@ -89,6 +88,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupListeners() {
         btnStart.setOnClickListener {
+            if (!hasSmsPermission()) {
+                showToast("Please grant SMS permission first")
+                requestSmsPermissionIfNeeded()
+                return@setOnClickListener
+            }
             Prefs.setMonitoringEnabled(this, true)
             PaymentMonitorService.start(this)
             LogManager.add(this, "INFO", "Monitoring started via foreground service")
@@ -109,23 +113,18 @@ class MainActivity : AppCompatActivity() {
         btnHistory.setOnClickListener { showHistoryDialog() }
     }
 
-    /**
-     * Refresh UI using CACHED values — no "CHECKING..." flash.
-     */
     private fun refreshUiState() {
         val hasAccess = isNotificationAccessGranted()
         tvAccessStatus.text = if (hasAccess) "CONNECTED ✓" else "NOT CONNECTED"
         tvAccessStatus.setTextColor(getColor(if (hasAccess) R.color.status_ok else R.color.status_error))
 
         val monitoring = Prefs.isMonitoringEnabled(this)
-        val serviceRunning = hasAccess && monitoring
+        val serviceRunning = monitoring && Prefs.getBackendUrl(this).isNotBlank()
         tvServiceStatus.text = if (serviceRunning) "RUNNING ✓" else "STOPPED"
         tvServiceStatus.setTextColor(getColor(if (serviceRunning) R.color.status_ok else R.color.status_error))
 
-        // ─── Backend Status: use CACHE, no flash ───
         val hasUrl = Prefs.getBackendUrl(this).isNotBlank()
         val hasSecret = Prefs.getBridgeSecret(this).isNotBlank()
-
         if (hasUrl && hasSecret) {
             if (Prefs.isBackendConnected(this)) {
                 tvBackendStatus.text = "CONNECTED ✓"
@@ -180,6 +179,43 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun hasSmsPermission(): Boolean {
+        return ContextCompat.checkSelfPermission(
+            this, Manifest.permission.RECEIVE_SMS
+        ) == PackageManager.PERMISSION_GRANTED &&
+                ContextCompat.checkSelfPermission(
+                    this, Manifest.permission.READ_SMS
+                ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun requestSmsPermissionIfNeeded() {
+        if (!hasSmsPermission()) {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(
+                    Manifest.permission.RECEIVE_SMS,
+                    Manifest.permission.READ_SMS
+                ),
+                SMS_PERMISSION_CODE
+            )
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == SMS_PERMISSION_CODE) {
+            if (hasSmsPermission()) {
+                showToast("SMS permission granted ✓")
+            } else {
+                showToast("SMS permission is required")
+            }
+        }
+    }
+
     private fun isNotificationAccessGranted(): Boolean {
         return try {
             val enabled = NotificationManagerCompat.getEnabledListenerPackages(this)
@@ -197,19 +233,10 @@ class MainActivity : AppCompatActivity() {
             try {
                 val intent = Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")
                 startActivity(intent)
-            } catch (_: Exception) {
-                try {
-                    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
-                    intent.data = android.net.Uri.parse("package:$packageName")
-                    startActivity(intent)
-                } catch (_: Exception) { }
-            }
+            } catch (_: Exception) { }
         }
     }
 
-    /**
-     * Manual test — button click, shows toast.
-     */
     private fun runConnectionTest() {
         tvBackendStatus.text = "TESTING..."
         tvBackendStatus.setTextColor(getColor(R.color.status_warn))
@@ -233,10 +260,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * Silent test — no "CHECKING..." flash, no toast.
-     * Updates cache in background; only changes UI if status actually changed.
-     */
     private fun runConnectionTestSilent() {
         activityScope.launch {
             val result = ApiClient.testConnection(this@MainActivity)
@@ -245,8 +268,7 @@ class MainActivity : AppCompatActivity() {
                 Prefs.setBackendLastCheck(this@MainActivity, System.currentTimeMillis())
                 Prefs.setBackendConnected(this@MainActivity, result.success)
 
-                // Only update UI if status changed (no flash if same)
-                if (result.success != wasConnected || tvBackendStatus.text.isNullOrBlank()) {
+                if (result.success != wasConnected) {
                     if (result.success) {
                         tvBackendStatus.text = "CONNECTED ✓"
                         tvBackendStatus.setTextColor(getColor(R.color.status_ok))
@@ -287,7 +309,6 @@ class MainActivity : AppCompatActivity() {
                 Prefs.setBridgeSecret(this, secret)
                 LogManager.add(this, "INFO", "Settings updated")
 
-                // Invalidate cache and test in background
                 Prefs.setBackendConnected(this, false)
                 Prefs.setBackendLastCheck(this, 0L)
                 runConnectionTestSilent()
@@ -351,10 +372,7 @@ class MainActivity : AppCompatActivity() {
     private fun showHistoryDialog() {
         AlertDialog.Builder(this)
             .setTitle("History")
-            .setMessage(
-                "Payment history view is available in the Logs screen.\n\n" +
-                        "Every parsed notification is logged with method, amount, sender, and TrxID."
-            )
+            .setMessage("SMS history is available in the Logs screen.")
             .setPositiveButton("OK", null)
             .show()
     }
